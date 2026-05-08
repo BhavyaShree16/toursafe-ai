@@ -16,68 +16,115 @@ def get_model():
     )
 
 def fetch_weather(state: BriefingState) -> BriefingState:
-    place = state["tourist"].get("place", "Northeast India")
-    first_place = place.split(",")[0].strip()
+    tourist = state["tourist"]
+
+    district = tourist.get("district", "")
+    place = tourist.get("place", "")
+
+    # Use district for weather search
+    search_location = district if district else place.split(",")[0].strip()
+
     api_key = os.getenv("OPENWEATHER_API_KEY")
+
+    weather_str = None
+
     try:
         res = requests.get(
             "http://api.openweathermap.org/data/2.5/weather",
-            params={"q": f"{first_place},IN", "appid": api_key, "units": "metric"},
+            params={
+                "q": f"{search_location},IN",
+                "appid": api_key,
+                "units": "metric"
+            },
             timeout=5
         )
+
         data = res.json()
+
         if res.status_code == 200:
             temp = data["main"]["temp"]
             desc = data["weather"][0]["description"]
             humidity = data["main"]["humidity"]
+
             weather_str = f"{temp}°C, {desc}, humidity {humidity}%"
-        else:
-            weather_str = "Weather data unavailable"
+
     except Exception:
-        weather_str = "Weather data unavailable"
-    return {**state, "weather": weather_str}
+        weather_str = None
+
+    return {
+        **state,
+        "weather": weather_str
+    }
 
 def generate_briefing(state: BriefingState) -> BriefingState:
     tourist = state["tourist"]
     weather = state["weather"]
+
+    district = tourist.get("district", "your destination")
+    place = tourist.get("place", district)
+
     model = get_model()
 
-    prompt = f"""You are a tourist safety assistant for Northeast India.
-Generate a friendly WhatsApp safety briefing message.
+    weather_line = (
+        f"Current weather in {district}: {weather}"
+        if weather else
+        ""
+    )
 
-Tourist: {tourist['name']}
-Destination: {tourist['place']}
+    prompt = f"""
+You are a tourist safety assistant for Tamil Nadu, India.
+
+Generate a friendly WhatsApp travel safety briefing.
+
+Tourist name: {tourist['name']}
+District: {district}
+Places visiting: {place}
 Check-in: {tourist['checkIn']}
 Check-out: {tourist['checkOut']}
-Purpose: {tourist['purpose']}
-Current weather: {weather}
+Purpose: {tourist.get('purpose', 'travel')}
+
+{weather_line}
 
 Instructions:
-- Keep it under 200 words
-- Warm friendly tone
-- Include weather info
-- Give 2-3 safety tips for their destination
-- End with: Reply SOS anytime if you need emergency help
-- No markdown, plain text only
-- Start with their name"""
+- Start with the tourist's name
+- Mention the district naturally
+- Include weather only if available
+- Give 2-3 short useful safety/travel tips
+- Keep it conversational and realistic
+- Under 150 words
+- Plain text only
+- No markdown
+- End exactly with:
+Reply SOS anytime if you need emergency help
+"""
 
     response = model.invoke(prompt)
-    return {**state, "briefing": response.content}
+
+    return {
+        **state,
+        "briefing": response.content
+    }
 
 def build_briefing_graph():
     graph = StateGraph(BriefingState)
+
     graph.add_node("fetch_weather", fetch_weather)
     graph.add_node("generate_briefing", generate_briefing)
+
     graph.set_entry_point("fetch_weather")
+
     graph.add_edge("fetch_weather", "generate_briefing")
     graph.add_edge("generate_briefing", END)
+
     return graph.compile()
 
 async def run_briefing_agent(tourist: dict) -> str:
     graph = build_briefing_graph()
+
     result = graph.invoke({
         "tourist": tourist,
         "weather": None,
         "briefing": None
     })
+
     return result["briefing"]
